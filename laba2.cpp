@@ -1,33 +1,31 @@
 ﻿#include <Windows.h>
 #include <tchar.h>
 
-//#include <xstring>
-//typedef std::basic_string<TCHAR, std::char_traits<TCHAR>,
-//	std::allocator<TCHAR> > String;
-//char* TextSource;
-//char* TextFF() {
-//	char TextSource[180];
-//	DWORD count;
-//	HANDLE hFile = CreateFile(L"text.txt", GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-//	if (hFile == INVALID_HANDLE_VALUE)
-//	{
-//		MessageBox(NULL, TEXT("Неудалось открыть файл"), TEXT("Warning"), MB_OK);
-//		CloseHandle(hFile);
-//		return TextSource;
-//	}
-//
-//	
-//	ReadFile(hFile, &TextSource, sizeof(TextSource), &count, NULL);
-//	WCHAR szTest[10];
-//	swprintf_s(szTest, 10, L"%d", count);
-//	szTest[4] = TextSource[3];
-//	//MessageBox(NULL, szTest, TEXT("Check"), MB_OK);
-//	CloseHandle(hFile);
-//	return TextSource;
-//}
-
+// положение окна и его высота
 int nowX, nowY, nowHeight;
 
+// функция генерации прямоугольников для текста
+RECT* generRECT(int sx, int sy, int nx, int ny, RECT rcBegin) {
+	RECT* rcTemp = new RECT[ny * nx];
+	RECT rcValue = rcBegin;
+	int i, j;
+	int t = 0;
+	for (i = 0; i < ny; i++) {
+		for (j = 0; j < nx; j++) {
+			rcTemp[t] = rcValue;
+			rcValue.left += sx / nx;
+			rcValue.right += sx / nx;
+			t++;
+		}
+		rcValue.left = rcBegin.left;
+		rcValue.right = rcBegin.right;
+		rcValue.top += sy / ny;
+		rcValue.bottom += sy / ny;
+	}
+	return rcTemp;
+}
+
+// функция для измерения длинны строки в пискелях
 int getStringWidth(TCHAR* text, HFONT font) {
 	HDC dc = GetDC(NULL);
 	SelectObject(dc, font);
@@ -40,11 +38,12 @@ int getStringWidth(TCHAR* text, HFONT font) {
 	return textWidth;
 }
 
-
-void CarryText(HDC hdc, TEXTMETRIC metricT, HFONT newFont, TCHAR* str, int sizeT, RECT *rc) {
+// функция для переноса текста 
+int CarryText(HDC hdc, TEXTMETRIC metricT, HFONT newFont, TCHAR* str, int sizeT, RECT* rc, int CarryN) {
+	CarryN++;
 	int sizeChar = metricT.tmAveCharWidth;
-	int sizeCarry = (sizeT - rc->right) / sizeChar;
-	if ((sizeT - rc->right) % sizeChar)
+	int sizeCarry = (sizeT - rc->right + rc->left) / sizeChar;
+	if ((sizeT - rc->right + rc->left) % sizeChar)
 		sizeCarry++;
 	TCHAR* strTemp = new TCHAR[sizeCarry];
 	int i = 0;
@@ -53,13 +52,75 @@ void CarryText(HDC hdc, TEXTMETRIC metricT, HFONT newFont, TCHAR* str, int sizeT
 		i++;
 	} while (i != sizeCarry);
 	strTemp[sizeCarry] = '\0';
-	//_tcscpy(strTemp, str);
 	rc->top += 20;
 	DrawText(hdc, strTemp, wcslen(strTemp), rc, DT_LEFT);
 	int sizeTNext = getStringWidth(strTemp, newFont);
-	if (sizeTNext - metricT.tmAveCharWidth + 2 > rc->right)
-		CarryText(hdc, metricT, newFont, strTemp, sizeTNext, rc);
+	if (sizeTNext - metricT.tmAveCharWidth + rc->left > rc->right)
+		CarryText(hdc, metricT, newFont, strTemp, sizeTNext, rc, CarryN);
+	else return CarryN;
 }
+
+struct comp
+{
+	RECT rcPaint;
+	TCHAR value[23];
+	comp* next;
+};
+
+struct dynList {
+	comp* head;
+	comp* tail;
+};
+
+void constrList(dynList& L) {
+	L.head = NULL;
+}
+
+bool chkEmpty(dynList L)
+{
+	return (L.head == NULL);
+}
+
+// функция добавления элемнта текста
+void compIn(dynList& L, TCHAR* v, RECT rcTemp)
+{
+	comp* c = new comp();
+	_tcscpy(c->value, v);
+	c->value[wcslen(c->value)] = '\0';
+	c->rcPaint = rcTemp;
+
+	c->next = NULL;
+	if (chkEmpty(L))
+		L.head = c;
+	else
+		L.tail->next = c;
+	L.tail = c;
+}
+
+// функция отрисовки и перерисовки таблицы
+comp* showList(HDC hdc, HWND hWnd, int nowX, int nowY, int sx, dynList L, HFONT newFont, TEXTMETRIC metricT, int ny) {
+
+	int CarryN = 0;
+	int sizeT;
+	while (L.head != NULL)
+	{
+		DrawText(hdc, L.head->value, wcslen(L.head->value), &L.head->rcPaint, DT_LEFT);
+		sizeT = getStringWidth(L.head->value, newFont);
+		if (sizeT - metricT.tmAveCharWidth + L.head->rcPaint.left > L.head->rcPaint.right) {
+			CarryN = CarryText(hdc, metricT, newFont, L.head->value, sizeT, &L.head->rcPaint, 0);
+			if (L.head->rcPaint.top + metricT.tmHeight > L.head->rcPaint.bottom) {
+				nowHeight = (22 + metricT.tmHeight) * ny * CarryN;
+				//nowHeight = 700;
+				MoveWindow(hWnd, nowX, nowY, sx, nowHeight, FALSE);
+				InvalidateRect(hWnd, NULL, TRUE);
+				UpdateWindow(hWnd);
+			}
+		}
+		L.head = L.head->next;
+	}
+	return L.head;
+}
+
 
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 TCHAR WinName[] = _T("MainFrame");
@@ -83,8 +144,8 @@ int APIENTRY _tWinMain(HINSTANCE This,
 	wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
 	if (!RegisterClass(&wc)) return 0;
 
-	nowX = CW_USEDEFAULT;
-	nowY = CW_USEDEFAULT;
+	nowX = 100;
+	nowY = 100;
 	nowHeight = 300;
 	hWnd = CreateWindow(WinName, 
 		_T("Laba2"), 
@@ -99,6 +160,7 @@ int APIENTRY _tWinMain(HINSTANCE This,
 		NULL); 
 	ShowWindow(hWnd, mode); 
 	//TextSource = TextFF();
+
 	while (GetMessage(&msg, NULL, 0, 0))
 	{
 		TranslateMessage(&msg); 
@@ -111,69 +173,99 @@ int APIENTRY _tWinMain(HINSTANCE This,
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message,
 	WPARAM wParam, LPARAM lParam)
 { 
+	// стркуктуры для рисования таблицы и текста
 	PAINTSTRUCT ps;
 	HDC hdc;
 
+	// точки для рисования таблицы
 	int x, y;
 	static int sx, sy;
 
-	int sizeT;
-	TCHAR str[] = L"qwertyuiopasdfgh";
+	// количество строк и столбов таблицы
+	static int nx = 2, ny = 2;
 
+	// размер текста в пискелях и его содержание
+	int sizeT;
+	TCHAR str[] = L"qwertyuiopasdfghzxcasd";
+
+	// метрики текста
 	TEXTMETRIC metricT;
 
+	// шрифт и область прямоугольника для вывода
 	HFONT newFont;
-	RECT rc{2,2,sy,sx};
+	RECT rc;
+	
+	RECT* rcMass;
+
+	BOOL chPaint = false;
+
+	dynList TablVar;
+	int i = 0;
+
 	switch (message)
 	{
 	case WM_SIZE:
 		sx = LOWORD(lParam);
 		sy = HIWORD(lParam);
-		nowHeight = sy;
 		break;
-	
-	//case WM_SIZING:
-	//	hdc = BeginPaint(hWnd, &ps);
-	//	GetTextMetrics(hdc, &metricT);
-	//	if (rc.top + metricT.tmHeight > rc.bottom) {
-	//		sy = rc.top + metricT.tmHeight * 3;
-	//		MoveWindow(hWnd, nowX, nowY, sx, sy, NULL);
-	//	}
-	//	break;
+	case WM_LBUTTONDOWN:
+		if (nx < 4) {
+			nx++;
+		}
+		InvalidateRect(hWnd, NULL, TRUE);
+		UpdateWindow(hWnd);
+		break;
+	case WM_RBUTTONDOWN:
+		if (ny < 4) {
+			ny++;
+		}
+		InvalidateRect(hWnd, NULL, TRUE);
+		UpdateWindow(hWnd);
+		break;
+	case WM_MOVE:
+		nowX = LOWORD(lParam);
+		nowY = HIWORD(lParam);
+		break;
 	case WM_PAINT:
+
+		// стартовые координаты яйчейки таблицы
+		rc.left = 2;
+		rc.top = 2;
+		rc.bottom = sy / ny;
+		rc.right = sx / nx;
+
+		// генерирация массива прямоугольников в которые будут вписываться тексты
+		rcMass = generRECT(sx, sy, nx, ny, rc);
+
 		hdc = BeginPaint(hWnd, &ps);
-		
-		for (x = 0; x < sx-20; x += sx / 3)
+
+		// иннициализация динам. списка
+		constrList(TablVar);
+		for (i = 0; i < nx * ny; i++) {
+			compIn(TablVar, str, rcMass[i]);
+		};
+
+		// рассчерчивание таблицы
+		for (x = 0; x < sx-20; x += sx / nx)
 		{
 			MoveToEx(hdc, x, 0, NULL);
 			LineTo(hdc, x, sy);
 		}
-		for (y = 0; y < sy; y += sy / 3)
+		for (y = 0; y < sy; y += sy / ny)
 		{
 			MoveToEx(hdc, 0, y, NULL);
 			LineTo(hdc, sx, y);
 		}
-		rc.left = 2;
-		rc.top = 2;
-		rc.bottom = sy / 3;
-		rc.right = sx / 3;
-		//MessageBoxA(NULL, TextSource, "dur", MB_OK);
+		
+		// создание шрифта и его установка
 		newFont = CreateFont(20, 0, 0, 0, 700, 1, 0, 0,
 			DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
 			DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("Arial"));
 		SetTextColor(hdc, RGB(200, 100, 200));
 		SelectObject(hdc, newFont);
 		GetTextMetrics(hdc, &metricT);
-		DrawText(hdc, str, wcslen(str), &rc,DT_LEFT);
-		sizeT = getStringWidth(str, newFont);
-		if (sizeT - metricT.tmAveCharWidth + 2 > rc.right) {
-			CarryText(hdc, metricT, newFont, str, sizeT, &rc);
-			if (rc.top + metricT.tmHeight > rc.bottom) {
-				nowHeight = rc.top + metricT.tmHeight * 3;
-				MoveWindow(hWnd, nowX, nowY, sx, nowHeight, NULL);
-				//SetWindowPos(hWnd,HWND_TOP, nowX, nowY, sx, nowHeight, )
-			}
-		}
+
+		showList(hdc, hWnd, nowX, nowY, sx, TablVar, newFont,metricT,ny);
 		
 		EndPaint(hWnd, &ps);
 		break;
